@@ -1,5 +1,5 @@
 module Checker (
-    SymbolStack,
+    SymbolTable,
     checkProgram
 ) where
 
@@ -9,14 +9,24 @@ import Stella.Abs
 
 import CheckError
 
-type SymbolStack = Map String Type;
+type SymbolTable = Map String Type;
 
-type Context = SymbolStack;
+data Context = Context
+    { table :: SymbolTable
+    , extensions :: [String]
+    }
+    deriving (Eq, Show);
 
-scanFunctions :: Program -> CheckResult SymbolStack
+scanExtensions :: Program -> CheckResult [String]
+scanExtensions (AProgram _ exts decls) = return (exts >>= scanExtPhrase)
+  where
+    scanExtPhrase (AnExtension names) = map scanExtName names
+    scanExtName (ExtensionName name) = name
+
+scanFunctions :: Program -> CheckResult SymbolTable
 scanFunctions (AProgram _ _ decls) = scanFunctionDecls decls
 
-scanFunctionDecls :: [Decl] -> CheckResult SymbolStack
+scanFunctionDecls :: [Decl] -> CheckResult SymbolTable
 scanFunctionDecls = fmap fromList . mapM scanFunctionDecl
 
 scanFunctionDecl :: Decl -> CheckResult (String, Type)
@@ -30,29 +40,62 @@ paramsToTypes :: [ParamDecl] -> [Type]
 paramsToTypes [] = []
 paramsToTypes (AParamDecl _ _type : next) = _type : paramsToTypes next
 
-checkMainExistence :: SymbolStack -> CheckResult ()
-checkMainExistence decls =
-    if hasMain $ keys decls
-        then Right ()
+checkMainExistence :: Context -> CheckResult ()
+checkMainExistence ctx =
+    if hasMain $ keys $ table ctx
+        then return ()
         else checkFailed MissingMain "  Отсутствует функция Main"
   where
     hasMain [] = False
     hasMain ("main" : _) = True
     hasMain (_ : rest) = hasMain rest
 
+checkExtensionSupport :: Context -> CheckResult ()
+checkExtensionSupport ctx = mapM_ checkExtension $ extensions ctx
+  where
+    checkExtension :: String -> CheckResult ()
+    checkExtension "#unit-type"                    = return ()
+    checkExtension "#unit-type"                    = return ()
+    checkExtension "#pairs"                        = return ()
+    checkExtension "#tuples"                       = return ()
+    checkExtension "#records"                      = return ()
+    checkExtension "#let-bindings"                 = return ()
+    checkExtension "#type-ascriptions"             = return ()
+    checkExtension "#sum-types"                    = return ()
+    checkExtension "#lists"                        = return ()
+    checkExtension "#variants"                     = return ()
+    checkExtension "#fixpoint-combinator"          = return ()
+    checkExtension "#natural-literals"             = return ()
+    --checkExtension "#nested-function-declarations" = return ()
+    --checkExtension "#nullary-functions"            = return ()
+    --checkExtension "#multiparameter-functions"     = return ()
+    --checkExtension "#structural-patterns"          = return ()
+    --checkExtension "#nullary-variant-labels"       = return ()
+    --checkExtension "#letrec-bindings"              = return ()
+    --checkExtension "#pattern-ascriptions"          = return ()
+    checkExtension ext = checkFailed Unsupported $ "  Unsupported extension: " ++ ext
+
+checkExtensionEnabled :: Context -> String -> CheckResult ()
+checkExtensionEnabled ctx ext = checkExtensionEnabledInList (extensions ctx) ext
+  where
+    checkExtensionEnabledInList [] ext = checkFailed Unsupported $ "  Extention not enabled: " ++ ext
+    checkExtensionEnabledInList (ext' : next) ext
+        | ext' == ext = return ()
+        | otherwise   = checkExtensionEnabledInList next ext
+
 getType :: Context -> String -> CheckResult Type
 getType ctx name
-    = case Data.Map.lookup name ctx of
+    = case Data.Map.lookup name (table ctx) of
         Just t -> return t
         Nothing -> checkFailed UndefinedVariable $ "  Undefined variable: " ++ name
 
-assume :: Context -> String -> Type -> Context
-assume ctx name newType = insert name newType ctx
+assumeType :: Context -> String -> Type -> Context
+assumeType ctx name newType = ctx{table = insert name newType (table ctx)}
 
 assumeFunctionParams :: Context -> [ParamDecl] -> Context
 assumeFunctionParams ctx [] = ctx
 assumeFunctionParams ctx (AParamDecl (StellaIdent name) theType : next)
-    = assumeFunctionParams (assume ctx name theType) next
+    = assumeFunctionParams (assumeType ctx name theType) next
 
 checkDeclaration :: Context -> Decl -> CheckResult ()
 checkDeclaration ctx (DeclFun _ _ args (NoReturnType) _ _ expr) = do
@@ -65,7 +108,10 @@ checkDeclaration _ _ = checkFailed Unsupported " Unsupported"
 
 checkProgram :: Program -> CheckResult ()
 checkProgram prog@(AProgram _ _ decls) = do
-    ctx <- scanFunctions prog
+    ext <- scanExtensions prog
+    tbl <- scanFunctions prog
+    let ctx = Context{table = tbl, extensions = ext}
+    checkExtensionSupport ctx
     checkMainExistence ctx
     mapM_ (checkDeclaration ctx) decls
 
@@ -83,6 +129,10 @@ equalTypes (TypeFun [a1] r1) (TypeFun [a2:aa2] r2) = (equalTypes a1 a2) && (equa
 equalTypes (TypeFun [a1:aa1] r1) (TypeFun [a2:aa2] r2) = (equalTypes a1 a2) && (equalTypes (TypeFun aa1 r1) (TypeFun aa2 r2))
 equalTypes a b = a == b
 -}
+
+checkTypes :: Type -> Type -> CheckResult ()
+checkTypes expected actual = when (expected /= actual) $ checkFailed UnexpectedTypeForExpression $
+    "  Expected " ++ show expected ++ ", actual " ++ show actual
 
 -- CHECK
 
@@ -139,8 +189,21 @@ checkTypeExpr _ctx _sample (Ref _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Deref _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (Application _expr _exprs) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (Application func args) = do
+    let argLen = length args
+    when (argLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+    when (argLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+    t <- synthTypeExpr ctx func
+    case t of
+        TypeFun argTypes retType ->
+            let funArgLen = length argTypes
+            when (funArgLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+            when (funArgLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+            when (funArgLen /= argLen) $ checkFailed IncorrectNumberOfArguments $
+                "  Func has " ++ show funArgLen ++ ", provided " ++ show argLen
+            zipWithM_ (checkTypeExpr ctx) argTypes args
+            checkTypes sample retType
+        _ -> checkFailed NotAFunction "  Not a function"
 checkTypeExpr _ctx _sample (TypeApplication _expr _types) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (DotRecord _expr (StellaIdent _name)) = do
@@ -199,8 +262,16 @@ checkTypeExpr _ctx _sample (ConstInt _n) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (Var (StellaIdent _name)) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (Var (StellaIdent name)) = do
+    t <- getType ctx name
+    if ctx == _sample
+        then return ()
+        else case sample of
+            TypeFun _ _ -> checkFailed NotAFunction $ "  Checking var " ++ name
+            TypeTuple _ -> checkFailed NotATuple $ "  Checking var " ++ name
+            TypeRecord _ -> checkFailed NotARecord $ "  Checking var " ++ name
+            TypeList _ -> checkFailed NotAList $ "  Checking var " ++ name
+            _ -> checkFailed UnexpectedTypeForExpression $ "  Checking var " ++ name
 
 -- SYNTH
 
@@ -257,8 +328,21 @@ synthTypeExpr _ctx (Ref _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Deref _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (Application _expr _exprs) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (Application func args) = do
+    let argLen = length args
+    when (argLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+    when (argLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+    t <- synthTypeExpr ctx func
+    case t of
+        TypeFun argTypes retType ->
+            let funArgLen = length argTypes
+            when (funArgLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+            when (funArgLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+            when (funArgLen /= argLen) $ checkFailed IncorrectNumberOfArguments $
+                "  Func has " ++ show funArgLen ++ ", provided " ++ show argLen
+            zipWithM_ (checkTypeExpr ctx) argTypes args
+            return retType
+        _ -> checkFailed NotAFunction "  Not a function"
 synthTypeExpr _ctx (TypeApplication _expr _types) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (DotRecord _expr (StellaIdent _name)) = do
@@ -317,5 +401,5 @@ synthTypeExpr _ctx (ConstInt _n) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (Var (StellaIdent _name)) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (Var StellaIdent) = do
+    getType ctx name
