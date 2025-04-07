@@ -42,8 +42,8 @@ run p s =
 showTree :: Program -> IO ()
 showTree tree = do
   putStrLn $ "\n[Abstract Syntax]\n\n" ++ show tree
-  putStrLn $ "\n[Linearized tree]\n\n" ++ printTree tree
--}
+  --putStrLn $ "\n[Linearized tree]\n\n" ++ printTree tree
+--}
 
 runChecker :: Program -> IO ()
 runChecker tree = case checkProgram tree of
