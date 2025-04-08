@@ -238,25 +238,30 @@ checkTypeExpr _ctx _sample (Inl _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Inr _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (Succ _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (Succ expr) = do
+    checkTypes sample TypeNat
+    checkTypeExpr ctx TypeNat expr
 checkTypeExpr _ctx _sample (LogicNot _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Pred _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (IsZero _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (IsZero _expr) = do
+    checkTypes sample TypeBool
+    checkTypeExpr ctx TypeNat expr
 checkTypeExpr _ctx _sample (Fix _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (NatRec _expr1 _expr2 _expr3) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (NatRec count init step) = do
+    checkTypeExpr ctx TypeNat count
+    initType <- synthTypeExpr init
+    checkTypes sample initType
+    checkTypeExpr (TypeFun [Nat] (TypeFun [initType] initType)) step
 checkTypeExpr _ctx _sample (Fold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Unfold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (ConstTrue) = do
+checkTypeExpr _ctx sample (ConstTrue) = do
     checkTypes sample TypeBool
-checkTypeExpr _ctx _sample (ConstFalse) = do
+checkTypeExpr _ctx sample (ConstFalse) = do
     checkTypes sample TypeBool
 checkTypeExpr ctx sample (ConstUnit) = do
     checkExtensionEnabled ctx "#unit-type"
@@ -382,18 +387,23 @@ synthTypeExpr _ctx (Inl _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Inr _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (Succ _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (Succ expr) = do
+    checkTypeExpr ctx TypeNat expr
+    return TypeNat
 synthTypeExpr _ctx (LogicNot _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Pred _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (IsZero _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (IsZero expr) = do
+    checkTypeExpr ctx TypeNat expr
+    return TypeBool
 synthTypeExpr _ctx (Fix _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (NatRec _expr1 _expr2 _expr3) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (NatRec count init step) = do
+    checkTypeExpr ctx TypeNat count
+    initType <- synthTypeExpr init
+    checkTypeExpr (TypeFun [Nat] (TypeFun [initType] initType)) step
+    return initType
 synthTypeExpr _ctx (Fold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Unfold _theType _expr) = do
@@ -410,5 +420,5 @@ synthTypeExpr ctx (ConstInt n) = do
     return TypeInt
 synthTypeExpr _ctx (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr ctx (Var StellaIdent) = do
+synthTypeExpr ctx (Var (StellaIdent name)) = do
     getType ctx name
