@@ -141,8 +141,10 @@ checkTypeExpr _ctx _sample (Sequence _expr1 _expr2) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Assign _expr1 _expr2) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (If _exprCond _exprTrue _exprFalse) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (If exprCond exprTrue exprFalse) = do
+    checkTypeExpr ctx TypeBool exprCond
+    checkTypeExpr ctx sample exprTrue
+    checkTypeExpr ctx sample exprFalse
 checkTypeExpr _ctx _sample (Let _patterns _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (LetRec _patterns _expr) = do
@@ -253,13 +255,15 @@ checkTypeExpr _ctx _sample (Fold _theType _expr) = do
 checkTypeExpr _ctx _sample (Unfold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (ConstTrue) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+    checkTypes sample TypeBool
 checkTypeExpr _ctx _sample (ConstFalse) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (ConstUnit) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (ConstInt _n) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+    checkTypes sample TypeBool
+checkTypeExpr ctx sample (ConstUnit) = do
+    checkExtensionEnabled ctx "#unit-type"
+    checkTypes sample TypeUnit
+checkTypeExpr ctx sample (ConstInt n) = do
+    when (n /= 0) $ checkExtensionEnabled ctx "#natural-literals"
+    checkTypes sample TypeInt
 checkTypeExpr _ctx _sample (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr ctx sample (Var (StellaIdent name)) = do
@@ -280,8 +284,11 @@ synthTypeExpr _ctx (Sequence _expr1 _expr2) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Assign _expr1 _expr2) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (If _exprCond _exprTrue _exprFalse) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (If exprCond exprTrue exprFalse) = do
+    checkTypeExpr ctx TypeBool exprCond
+    sample <- synthTypeExpr ctx exprTrue
+    checkTypeExpr ctx sample exprFalse
+    return sample
 synthTypeExpr _ctx (Let _patterns _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (LetRec _patterns _expr) = do
@@ -392,13 +399,15 @@ synthTypeExpr _ctx (Fold _theType _expr) = do
 synthTypeExpr _ctx (Unfold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (ConstTrue) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+    return TypeBool
 synthTypeExpr _ctx (ConstFalse) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (ConstUnit) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (ConstInt _n) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+    return TypeBool
+synthTypeExpr ctx (ConstUnit) = do
+    checkExtensionEnabled ctx "#unit-type"
+    return TypeUnit
+synthTypeExpr ctx (ConstInt n) = do
+    when (n /= 0) $ checkExtensionEnabled ctx "#natural-literals"
+    return TypeInt
 synthTypeExpr _ctx (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr ctx (Var StellaIdent) = do
