@@ -55,7 +55,6 @@ checkExtensionSupport ctx = mapM_ checkExtension $ extensions ctx
   where
     checkExtension :: String -> CheckResult ()
     checkExtension "#unit-type"                    = return ()
-    checkExtension "#unit-type"                    = return ()
     checkExtension "#pairs"                        = return ()
     checkExtension "#tuples"                       = return ()
     checkExtension "#records"                      = return ()
@@ -130,9 +129,11 @@ equalTypes (TypeFun [a1:aa1] r1) (TypeFun [a2:aa2] r2) = (equalTypes a1 a2) && (
 equalTypes a b = a == b
 -}
 
-checkTypes :: Type -> Type -> CheckResult ()
-checkTypes expected actual = when (expected /= actual) $ checkFailed UnexpectedTypeForExpression $
-    "  Expected " ++ show expected ++ ", actual " ++ show actual
+checkTypes :: Context -> Type -> Type -> CheckResult ()
+checkTypes ctx expected actual =
+    when (expected /= actual) $
+        checkFailed UnexpectedTypeForExpression $
+            "  Expected " ++ show expected ++ ", actual " ++ show actual
 
 -- CHECK
 
@@ -167,8 +168,21 @@ checkTypeExpr _ctx _sample (TypeAsc _expr _theType) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (TypeCast _expr _theType) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx _sample (Abstraction _params _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+checkTypeExpr ctx sample (Abstraction params expr) = do
+    case sample of
+        TypeFun tParams tRet -> do
+            let tParamsLen = length tParams
+            let paramsLen = length params
+            when (tParamsLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+            when (tParamsLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+            when (paramsLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+            when (paramsLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+            when (tParamsLen /= paramsLen) $ checkFailed IncorrectNumberOfArguments $
+                "  Abstraction has " ++ show paramsLen ++ ", expected " ++ show tParamsLen
+            let declaredTypes = map (\(AParamDecl _ t) -> t) params
+            zipWithM_ (checkTypes ctx) tParams declaredTypes
+            checkTypeExpr (assumeFunctionParams ctx params) tRet expr
+        otherType -> checkFailed UnexpectedLambda "  Compared with " ++ show otherType
 checkTypeExpr _ctx _sample (Variant (StellaIdent _name) _exprData) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Match _expr _cases) = do
@@ -197,14 +211,14 @@ checkTypeExpr ctx sample (Application func args) = do
     when (argLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
     t <- synthTypeExpr ctx func
     case t of
-        TypeFun argTypes retType ->
+        TypeFun argTypes retType -> do
             let funArgLen = length argTypes
             when (funArgLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
             when (funArgLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
             when (funArgLen /= argLen) $ checkFailed IncorrectNumberOfArguments $
                 "  Func has " ++ show funArgLen ++ ", provided " ++ show argLen
             zipWithM_ (checkTypeExpr ctx) argTypes args
-            checkTypes sample retType
+            checkTypes ctx sample retType
         _ -> checkFailed NotAFunction "  Not a function"
 checkTypeExpr _ctx _sample (TypeApplication _expr _types) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
@@ -239,36 +253,36 @@ checkTypeExpr _ctx _sample (Inl _expr) = do
 checkTypeExpr _ctx _sample (Inr _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr ctx sample (Succ expr) = do
-    checkTypes sample TypeNat
+    checkTypes ctx sample TypeNat
     checkTypeExpr ctx TypeNat expr
 checkTypeExpr _ctx _sample (LogicNot _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Pred _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr ctx sample (IsZero _expr) = do
-    checkTypes sample TypeBool
+    checkTypes ctx sample TypeBool
     checkTypeExpr ctx TypeNat expr
 checkTypeExpr _ctx _sample (Fix _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr ctx sample (NatRec count init step) = do
     checkTypeExpr ctx TypeNat count
     initType <- synthTypeExpr init
-    checkTypes sample initType
+    checkTypes ctx sample initType
     checkTypeExpr (TypeFun [Nat] (TypeFun [initType] initType)) step
 checkTypeExpr _ctx _sample (Fold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr _ctx _sample (Unfold _theType _expr) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-checkTypeExpr _ctx sample (ConstTrue) = do
-    checkTypes sample TypeBool
-checkTypeExpr _ctx sample (ConstFalse) = do
-    checkTypes sample TypeBool
+checkTypeExpr ctx sample (ConstTrue) = do
+    checkTypes ctx sample TypeBool
+checkTypeExpr ctx sample (ConstFalse) = do
+    checkTypes ctx sample TypeBool
 checkTypeExpr ctx sample (ConstUnit) = do
     checkExtensionEnabled ctx "#unit-type"
-    checkTypes sample TypeUnit
+    checkTypes ctx sample TypeUnit
 checkTypeExpr ctx sample (ConstInt n) = do
     when (n /= 0) $ checkExtensionEnabled ctx "#natural-literals"
-    checkTypes sample TypeInt
+    checkTypes ctx sample TypeInt
 checkTypeExpr _ctx _sample (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 checkTypeExpr ctx sample (Var (StellaIdent name)) = do
@@ -316,8 +330,13 @@ synthTypeExpr _ctx (TypeAsc _expr _theType) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (TypeCast _expr _theType) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
-synthTypeExpr _ctx (Abstraction _params _expr) = do
-    checkFailed Unsupported "  Unsupported"  -- TODO
+synthTypeExpr ctx (Abstraction params expr) = do
+    let paramsLen = length params
+    when (paramsLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
+    when (paramsLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
+    let declaredTypes = map (\(AParamDecl _ t) -> t) params
+    retType <- synthTypeExpr (assumeFunctionParams ctx params) expr
+    return TypeFun declaredTypes retType
 synthTypeExpr _ctx (Variant (StellaIdent _name) _exprData) = do
     checkFailed Unsupported "  Unsupported"  -- TODO
 synthTypeExpr _ctx (Match _expr _cases) = do
@@ -346,7 +365,7 @@ synthTypeExpr ctx (Application func args) = do
     when (argLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
     t <- synthTypeExpr ctx func
     case t of
-        TypeFun argTypes retType ->
+        TypeFun argTypes retType -> do
             let funArgLen = length argTypes
             when (funArgLen == 0) $ checkExtensionEnabled ctx "#nullary-functions"
             when (funArgLen > 1) $ checkExtensionEnabled ctx "#multiparameter-functions"
