@@ -28,6 +28,7 @@ library
       Checker
       CheckError
       Lib
+      Named
       Stella.Abs
       Stella.ErrM
       Stella.Lex

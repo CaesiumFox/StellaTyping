@@ -48,7 +48,7 @@ showTree tree = do
 runChecker :: Program -> IO ()
 runChecker tree = case checkProgram tree of
     Left err -> do
-        putStr $ show err
+        putStrLn $ show err
         exitFailure
     Right _ -> return ()
 
