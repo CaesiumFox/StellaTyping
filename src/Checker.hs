@@ -282,10 +282,14 @@ checkTypeExpr _ctx _sample (TryWith _expr1 _expr2) = do
     checkFailed Unsupported
 checkTypeExpr _ctx _sample (TryCastAs _expr1 _theType _pattern _expr2 _expr3) = do
     checkFailed Unsupported
-checkTypeExpr _ctx _sample (Inl _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-checkTypeExpr _ctx _sample (Inr _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+checkTypeExpr ctx sample (Inl expr) =
+    case sample of
+        TypeSum lt rt -> checkTypeExpr ctx lt expr
+        _ -> UnexpectedInjection
+checkTypeExpr ctx sample (Inr expr)
+    case sample of
+        TypeSum lt rt -> checkTypeExpr ctx rt expr
+        _ -> UnexpectedInjection
 checkTypeExpr ctx sample (Succ expr) = do
     checkTypes ctx sample TypeNat
     checkTypeExpr ctx TypeNat expr
@@ -304,7 +308,6 @@ checkTypeExpr ctx sample (Fix expr) = do
             checkTypes ctx sample rType
             checkTypes ctx rType $ head lType -- ???
         _ -> NotAFunction
-    checkFailed Unsupported  -- TODO: first, urgent
 checkTypeExpr ctx sample (NatRec count initial step) = do
     checkTypeExpr ctx TypeNat count
     initType <- synthTypeExpr ctx initial
