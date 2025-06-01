@@ -296,7 +296,14 @@ checkTypeExpr _ctx _sample (Pred _expr) = do
 checkTypeExpr ctx sample (IsZero expr) = do
     checkTypes ctx sample TypeBool
     checkTypeExpr ctx TypeNat expr
-checkTypeExpr _ctx _sample (Fix _expr) = do
+checkTypeExpr ctx sample (Fix expr) = do
+    eType <- synthTypeExpr ctx expr
+    case eType of
+        TypeFun lTypes rType -> do
+            when (length lTypes /= 1) $ checkFailed IncorrectNumberOfArguments -- ???
+            checkTypes ctx sample rType
+            checkTypes ctx rType $ head lType -- ???
+        _ -> NotAFunction
     checkFailed Unsupported  -- TODO: first, urgent
 checkTypeExpr ctx sample (NatRec count initial step) = do
     checkTypeExpr ctx TypeNat count
@@ -458,8 +465,14 @@ synthTypeExpr _ctx (Pred _expr) = do
 synthTypeExpr ctx (IsZero expr) = do
     checkTypeExpr ctx TypeNat expr
     return TypeBool
-synthTypeExpr _ctx (Fix _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+synthTypeExpr ctx (Fix expr) = do
+    eType <- synthTypeExpr ctx expr
+    case eType of
+        TypeFun lTypes rType -> do
+            when (length lTypes /= 1) $ checkFailed IncorrectNumberOfArguments -- ???
+            checkTypes ctx rType $ head lType -- ???
+            return rType
+        _ -> NotAFunction
 synthTypeExpr ctx (NatRec count initial step) = do
     checkTypeExpr ctx TypeNat count
     initType <- synthTypeExpr ctx initial
