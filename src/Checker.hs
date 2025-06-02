@@ -194,9 +194,8 @@ checkStructureDuplicates (TypeList t) = checkStructureDuplicates t
 checkStructureDuplicates (TypeRef t) = checkStructureDuplicates t
 checkStructureDuplicates _ = return ()
 
-checkRecordDuplicates :: Expr -> CheckResult ()
-checkRecordDuplicates (Record bindings) = mapM_ (checkNameDuplicates DuplicateRecordFields) bindings
-checkRecordDuplicates _ = return ()
+checkRecordDuplicates :: [Binding] -> CheckResult ()
+checkRecordDuplicates = mapM_ $ checkNameDuplicates DuplicateRecordFields
 
 
 
@@ -305,6 +304,7 @@ checkTypeExpr ctx sample (Tuple exprs) =
             zipWithM_ (checkTypeExpr ctx) fields exprs
         _ -> checkFailed UnexpectedTuple
 checkTypeExpr ctx sample (Record bindings) =
+    checkRecordDuplicates bindings
     case sample of
         TypeRecord sampleBindings -> do
             when (length bindings /= length sampleBindings) $ checkFailed UnexpectedTupleLength
