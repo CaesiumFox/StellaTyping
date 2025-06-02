@@ -33,15 +33,20 @@ scanFunctionDecls :: [Decl] -> CheckResult SymbolTable
 scanFunctionDecls = fmap Data.Map.fromList . mapM scanFunctionDecl
 
 scanFunctionDecl :: Decl -> CheckResult (String, Type)
-scanFunctionDecl (DeclFun _ (StellaIdent name) args (NoReturnType) _ _ _)
-    = return (name, TypeFun (paramsToTypes args) TypeUnit)
-scanFunctionDecl (DeclFun _ (StellaIdent name) args (SomeReturnType retType) _ _ _)
-    = return (name, TypeFun (paramsToTypes args) retType)
+scanFunctionDecl (DeclFun _ (StellaIdent name) args (NoReturnType) _ _ _) = do
+    let aTypes = paramsToTypes args
+    mapM_ checkStructureDuplicates aTypes
+    return (name, TypeFun aTypes TypeUnit)
+scanFunctionDecl (DeclFun _ (StellaIdent name) args (SomeReturnType retType) _ _ _) = do
+    let aTypes = paramsToTypes args
+    mapM_ checkStructureDuplicates aTypes
+    checkStructureDuplicates retType
+    return (name, TypeFun aTypes retType)
 scanFunctionDecl _ = checkFailed Unsupported
 
 paramsToTypes :: [ParamDecl] -> [Type]
 paramsToTypes [] = []
-paramsToTypes (AParamDecl _ _type : next) = _type : paramsToTypes next
+paramsToTypes (AParamDecl _ theType : next) = theType : paramsToTypes next
 
 checkMainExistence :: Context -> CheckResult ()
 checkMainExistence ctx =
@@ -57,28 +62,35 @@ checkExtensionSupport :: Context -> CheckResult ()
 checkExtensionSupport ctx = mapM_ checkExtension $ extensions ctx
   where
     checkExtension :: String -> CheckResult ()
-    checkExtension "#unit-type"                    = return ()
-    checkExtension "#pairs"                        = return ()
-    checkExtension "#tuples"                       = return ()
-    checkExtension "#records"                      = return ()
-    checkExtension "#let-bindings"                 = return ()
-    checkExtension "#type-ascriptions"             = return ()
-    checkExtension "#sum-types"                    = return ()
-    checkExtension "#lists"                        = return ()
-    checkExtension "#variants"                     = return ()
-    checkExtension "#fixpoint-combinator"          = return ()
-    checkExtension "#natural-literals"             = return ()
-    checkExtension "#nullary-functions"            = return ()
-    checkExtension "#multiparameter-functions"     = return ()
-    checkExtension _ext = checkFailed Unsupported
+    checkExtension _ext = return () -- Simplification
+    -- checkExtension "#unit-type"                    = return ()
+    -- checkExtension "#pairs"                        = return ()
+    -- checkExtension "#tuples"                       = return ()
+    -- checkExtension "#records"                      = return ()
+    -- checkExtension "#let-bindings"                 = return ()
+    -- checkExtension "#type-ascriptions"             = return ()
+    -- checkExtension "#sum-types"                    = return ()
+    -- checkExtension "#lists"                        = return ()
+    -- checkExtension "#variants"                     = return ()
+    -- checkExtension "#fixpoint-combinator"          = return ()
+    -- checkExtension "#natural-literals"             = return ()
+    -- checkExtension "#nullary-functions"            = return ()
+    -- checkExtension "#multiparameter-functions"     = return ()
+    -- checkExtension _ext = checkFailed Unsupported
 
-checkExtensionEnabled :: Context -> String -> CheckResult ()
+checkExtensionEnabled :: Context -> String -> Bool
 checkExtensionEnabled ctx extension = checkExtensionEnabledInList (extensions ctx) extension
   where
-    checkExtensionEnabledInList [] _ext = checkFailed Unsupported
+    checkExtensionEnabledInList [] _ext = False
     checkExtensionEnabledInList (ext' : next) ext
-        | ext' == ext = return ()
+        | ext' == ext = True
         | otherwise   = checkExtensionEnabledInList next ext
+
+checkExtensionEnabledM :: Context -> String -> CheckResult ()
+checkExtensionEnabledM ctx extension =
+    if checkExtensionEnabled ctx extension
+        then return ()
+        else checkFailed Unsupported
 
 getType :: Context -> String -> CheckResult Type
 getType ctx name
@@ -155,6 +167,37 @@ checkNameDuplicates' code names =
 checkNameDuplicates :: (Named a) => CheckErrorCode -> [a] -> CheckResult ()
 checkNameDuplicates code named = checkNameDuplicates' code $ map getName named
 
+checkStructureDuplicatesInRecordBinding :: RecordFieldType -> CheckResult ()
+checkStructureDuplicatesInRecordBinding (ARecordFieldType _ t) = checkStructureDuplicates t
+
+checkStructureDuplicatesInVariantBinding :: VariantFieldType -> CheckResult ()
+checkStructureDuplicatesInVariantBinding (AVariantFieldType _ (SomeTyping t)) = checkStructureDuplicates t
+checkStructureDuplicatesInVariantBinding _ = return ()
+
+checkStructureDuplicates :: Type -> CheckResult ()
+checkStructureDuplicates (TypeRecord bindings) = do
+    mapM_ (checkNameDuplicates DuplicateRecordTypeFields) bindings
+    mapM_ checkStructureDuplicatesInRecordBinding bindings
+checkStructureDuplicates (TypeVariant bindings) = do
+    mapM_ (checkNameDuplicates DuplicateVariantTypeFields) bindings
+    mapM_ checkStructureDuplicatesInVariantBinding bindings
+checkStructureDuplicates (TypeFun aTypes rType) = do
+    mapM_ checkStructureDuplicates aTypes
+    checkStructureDuplicates rType
+checkStructureDuplicates (TypeForAll _ t) = checkStructureDuplicates t
+checkStructureDuplicates (TypeRec _ t) = checkStructureDuplicates t
+checkStructureDuplicates (TypeSum t1 t2) = do
+    checkStructureDuplicates t1
+    checkStructureDuplicates t2
+checkStructureDuplicates (TypeTuple tt) = mapM_ checkStructureDuplicates tt
+checkStructureDuplicates (TypeList t) = checkStructureDuplicates t
+checkStructureDuplicates (TypeRef t) = checkStructureDuplicates t
+checkStructureDuplicates _ = return ()
+
+checkRecordDuplicates :: Expr -> CheckResult ()
+checkRecordDuplicates (Record bindings) = mapM_ (checkNameDuplicates DuplicateRecordFields) bindings
+checkRecordDuplicates _ = return ()
+
 
 
 -- CHECK
@@ -189,6 +232,7 @@ checkTypeExpr _ctx _sample (Equal _expr1 _expr2) = do
 checkTypeExpr _ctx _sample (NotEqual _expr1 _expr2) = do
     checkFailed Unsupported
 checkTypeExpr ctx sample (TypeAsc expr theType) = do
+    checkStructureDuplicates theType
     checkTypes ctx sample theType
     checkTypeExpr ctx theType expr
 checkTypeExpr _ctx _sample (TypeCast _expr _theType) = do
@@ -200,6 +244,7 @@ checkTypeExpr ctx sample (Abstraction params expr) = do
             let paramsLen = length params
             when (tParamsLen /= paramsLen) $ checkFailed IncorrectNumberOfArguments
             let declaredTypes = map (\(AParamDecl _ t) -> t) params
+            mapM_ checkStructureDuplicates declaredTypes
             zipWithM_ (checkTypes ctx) tParams declaredTypes
             checkTypeExpr (assumeFunctionParams ctx params) tRet expr
         _ -> checkFailed UnexpectedLambda
@@ -207,8 +252,10 @@ checkTypeExpr _ctx _sample (Variant (StellaIdent _name) _exprData) = do
     checkFailed Unsupported  -- TODO: first, urgent
 checkTypeExpr _ctx _sample (Match _expr _cases) = do
     checkFailed Unsupported  -- TODO: first, urgent
-checkTypeExpr _ctx _sample (List _exprs) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+checkTypeExpr ctx sample (List exprs) =
+    case sample of
+        TypeList innerType -> mapM_ (checkTypeExpr ctx innerType) exprs
+        _ -> checkFailed UnexpectedList
 checkTypeExpr _ctx _sample (Add _expr1 _expr2) = do
     checkFailed Unsupported
 checkTypeExpr _ctx _sample (Subtract _expr1 _expr2) = do
@@ -264,14 +311,31 @@ checkTypeExpr ctx sample (Record bindings) =
             -- zipWithM_ (checkTypeExpr ctx) sampleBindings bindings
             -- FIXME: check field missing/unexpected
         _ -> checkFailed UnexpectedTuple
-checkTypeExpr _ctx _sample (ConsList _expr1 _expr2) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-checkTypeExpr _ctx _sample (Head _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-checkTypeExpr _ctx _sample (IsEmpty _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-checkTypeExpr _ctx _sample (Tail _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+checkTypeExpr ctx sample (ConsList expr1 expr2) =
+    case sample of
+        TypeList innerType -> do
+            checkTypeExpr ctx innerType expr1
+            checkTypeExpr ctx sample expr2
+        _ -> checkFailed UnexpectedList
+checkTypeExpr ctx sample (Head expr) = do
+    checkTypeExpr ctx (TypeList sample) expr
+checkTypeExpr ctx sample (IsEmpty expr) = do
+    checkTypes ctx sample TypeBool
+    t <- synthTypeExpr ctx expr
+    case t of
+        TypeList innerType -> return innerType
+        _ -> checkFailed NotAList
+checkTypeExpr ctx sample (Tail expr) = do
+    -- Странная последовательность действий,
+    -- но реверс инжиниринг эталонной реализации таков:
+    case sample of
+        TypeList sampleInnerType -> do
+            checkTypeExpr ctx sample expr
+        _ -> do
+            argType <- synthTypeExpr ctx expr
+            case argType of
+                TypeList _ -> checkFailed UnexpectedTypeForExpression
+                _ -> checkFailed NotAList
 checkTypeExpr _ctx _sample (Panic) = do
     checkFailed Unsupported
 checkTypeExpr _ctx _sample (Throw _expr) = do
@@ -373,6 +437,7 @@ synthTypeExpr _ctx (Equal _expr1 _expr2) = do
 synthTypeExpr _ctx (NotEqual _expr1 _expr2) = do
     checkFailed Unsupported
 synthTypeExpr ctx (TypeAsc expr theType) = do
+    checkStructureDuplicates theType
     checkTypeExpr ctx theType expr
     return theType
 synthTypeExpr _ctx (TypeCast _expr _theType) = do
@@ -380,14 +445,15 @@ synthTypeExpr _ctx (TypeCast _expr _theType) = do
 synthTypeExpr ctx (Abstraction params expr) = do
     --let paramsLen = length params
     let declaredTypes = map (\(AParamDecl _ t) -> t) params
+    mapM_ checkStructureDuplicates declaredTypes
     retType <- synthTypeExpr (assumeFunctionParams ctx params) expr
     return $ TypeFun declaredTypes retType
 synthTypeExpr _ctx (Variant (StellaIdent _name) _exprData) = do
-    checkFailed AmbiguousVariantType -- FUTURE: subtyping
+    checkFailed AmbiguousVariantType
 synthTypeExpr _ctx (Match _expr _cases) = do
     checkFailed Unsupported  -- TODO: first, urgent
 synthTypeExpr _ctx (List _exprs) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+    checkFailed AmbiguousList
 synthTypeExpr _ctx (Add _expr1 _expr2) = do
     checkFailed Unsupported
 synthTypeExpr _ctx (Subtract _expr1 _expr2) = do
@@ -437,13 +503,22 @@ synthTypeExpr ctx (Record bindings) = do
         ) bindings
     return $ TypeRecord types
 synthTypeExpr _ctx (ConsList _expr1 _expr2) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-synthTypeExpr _ctx (Head _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-synthTypeExpr _ctx (IsEmpty _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
-synthTypeExpr _ctx (Tail _expr) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+    checkFailed AmbiguousList
+synthTypeExpr ctx (Head expr) = do
+    t <- synthTypeExpr ctx expr
+    case t of
+        TypeList innerType -> return innerType
+        _ -> checkFailed NotAList
+synthTypeExpr ctx (IsEmpty expr) = do
+    t <- synthTypeExpr ctx expr
+    case t of
+        TypeList _ -> return TypeBool
+        _ -> checkFailed NotAList
+synthTypeExpr ctx (Tail expr) = do
+    t <- synthTypeExpr ctx expr
+    case t of
+        TypeList _ -> return t
+        _ -> checkFailed NotAList
 synthTypeExpr _ctx (Panic) = do
     checkFailed Unsupported
 synthTypeExpr _ctx (Throw _expr) = do
@@ -455,9 +530,9 @@ synthTypeExpr _ctx (TryWith _expr1 _expr2) = do
 synthTypeExpr _ctx (TryCastAs _expr1 _theType _pattern _expr2 _expr3) = do
     checkFailed Unsupported
 synthTypeExpr _ctx (Inl _expr) = do
-    checkFailed AmbiguousSumType -- FUTURE: subtyping
+    checkFailed AmbiguousSumType
 synthTypeExpr _ctx (Inr _expr) = do
-    checkFailed AmbiguousSumType -- FUTURE: subtyping
+    checkFailed AmbiguousSumType
 synthTypeExpr ctx (Succ expr) = do
     checkTypeExpr ctx TypeNat expr
     return TypeNat
