@@ -183,15 +183,15 @@ getVariantTypeByLabel (AVariantFieldType (StellaIdent name) NoTyping : next) lab
     | name == label = return Nothing
     | otherwise     = getVariantTypeByLabel next label
 getVariantTypeByLabel (AVariantFieldType (StellaIdent name) (SomeTyping t) : next) label
-    | name == label = return t
+    | name == label = return $ Just t
     | otherwise     = getVariantTypeByLabel next label
 
 checkStructureDuplicates :: Type -> CheckResult ()
 checkStructureDuplicates (TypeRecord bindings) = do
-    mapM_ (checkNameDuplicates DuplicateRecordTypeFields) bindings
+    checkNameDuplicates DuplicateRecordTypeFields bindings
     mapM_ checkStructureDuplicatesInRecordBinding bindings
 checkStructureDuplicates (TypeVariant bindings) = do
-    mapM_ (checkNameDuplicates DuplicateVariantTypeFields) bindings
+    checkNameDuplicates DuplicateVariantTypeFields bindings
     mapM_ checkStructureDuplicatesInVariantBinding bindings
 checkStructureDuplicates (TypeFun aTypes rType) = do
     mapM_ checkStructureDuplicates aTypes
@@ -207,10 +207,10 @@ checkStructureDuplicates (TypeRef t) = checkStructureDuplicates t
 checkStructureDuplicates _ = return ()
 
 checkRecordDuplicates :: [Binding] -> CheckResult ()
-checkRecordDuplicates = mapM_ $ checkNameDuplicates DuplicateRecordFields
+checkRecordDuplicates = checkNameDuplicates DuplicateRecordFields
 
 checkRecordInnerTypes :: Context -> [Binding] -> [RecordFieldType] -> CheckResult ()
-checkRecordInnerTypes ctx exrps types = do
+checkRecordInnerTypes ctx exprs types = do
     let eMap = Data.Map.fromList $ map (\(ABinding (StellaIdent n) e) -> (n, e)) exprs
     mapM_ (
         \(ARecordFieldType (StellaIdent n) t) ->
@@ -218,7 +218,37 @@ checkRecordInnerTypes ctx exrps types = do
                 Just expr -> checkTypeExpr ctx t expr
                 Nothing -> checkFailed MissingRecordFields
         )
-        types'
+        types
+
+checkTypeSumCover :: [Pattern] -> CheckResult ()
+checkTypeSumCover = checkTypeSumCover' False False
+  where
+    checkTypeSumCover' :: Bool -> Bool -> [Pattern] -> CheckResult ()
+    checkTypeSumCover' hasInl hasInr []
+        | hasInl && hasInr = return ()
+        | otherwise = checkFailed NonexhaustiveMatchPatterns
+    checkTypeSumCover' hasInl hasInr (PatternInl _ : next) =
+        checkTypeSumCover' True hasInr next
+    checkTypeSumCover' hasInl hasInr (PatternInr _ : next) =
+        checkTypeSumCover' hasInl True next
+
+checkTypeVariantCover :: [VariantFieldType] -> [Pattern] -> CheckResult ()
+checkTypeVariantCover needed = checkTypeVariantCover' Data.Set.empty (Data.Set.fromList $ map getName needed)
+  where
+    checkTypeVariantCover' :: Set String -> Set String -> [Pattern] -> CheckResult ()
+    checkTypeVariantCover' covered needed []
+        | Data.Set.null (Data.Set.difference needed covered) = return ()
+        | otherwise = checkFailed NonexhaustiveMatchPatterns
+    checkTypeVariantCover' covered needed (PatternVariant (StellaIdent label) _ : next)
+        | Data.Set.notMember label needed = checkFailed UnexpectedPatternForType
+        | otherwise = checkTypeVariantCover' (Data.Set.insert label covered) needed next
+
+variantToMap :: [VariantFieldType] -> CheckResult (Map String Type)
+variantToMap bindings = fmap Data.Map.fromList $ mapM variantFieldToPair bindings
+  where
+    variantFieldToPair :: VariantFieldType -> CheckResult (String, Type)
+    variantFieldToPair (AVariantFieldType (StellaIdent name) NoTyping) = checkFailed Unsupported
+    variantFieldToPair (AVariantFieldType (StellaIdent name) (SomeTyping t)) = return (name, t)
 
 
 
@@ -271,17 +301,43 @@ checkTypeExpr ctx sample (Abstraction params expr) = do
             checkTypeExpr (assumeFunctionParams ctx params) tRet expr
         _ -> checkFailed UnexpectedLambda
 checkTypeExpr ctx sample (Variant (StellaIdent name) exprData) = do
-    when (exprData == NoExprData) checkFailed Unsupported
+    when (exprData == NoExprData) $ checkFailed Unsupported
     case sample of
         TypeVariant bindings -> do
             maybeT <- getVariantTypeByLabel bindings name
-            when (t == Nothing) checkFailed Unsupported
+            when (maybeT == Nothing) $ checkFailed Unsupported
             let (Just t) = maybeT
             let (SomeExprData expr) = exprData
             checkTypeExpr ctx t expr
         _ -> checkFailed UnexpectedVariant
-checkTypeExpr _ctx _sample (Match _expr _cases) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+checkTypeExpr ctx sample (Match expr cases) = do
+    let patterns = map (\(AMatchCase p _) -> p) cases
+    matched <- synthTypeExpr ctx expr
+    case matched of
+        TypeSum t1 t2 -> do
+            checkTypeSumCover patterns
+            mapM_ (\(AMatchCase pat expr) -> do
+                    case pat of
+                        PatternInl (PatternVar (StellaIdent var)) -> checkTypeExpr (assumeType ctx var t1) sample expr
+                        PatternInr (PatternVar (StellaIdent var)) -> checkTypeExpr (assumeType ctx var t2) sample expr
+                        _ -> checkFailed Unsupported
+                )
+                cases
+        TypeVariant labels -> do
+            typeMap <- variantToMap labels
+            checkTypeVariantCover labels patterns
+            mapM_ (\(AMatchCase pat expr) -> do
+                    case pat of
+                        PatternVariant (StellaIdent label) (SomePatternData (PatternVar (StellaIdent var))) ->
+                            case Data.Map.lookup label typeMap of
+                                Just t -> checkTypeExpr (assumeType ctx var t) sample expr
+                                Nothing -> checkFailed Unsupported
+                        _ -> checkFailed Unsupported
+                )
+                cases
+            -- labels
+            -- TODO: first, urgent
+        _ -> checkFailed UnexpectedPatternForType
 checkTypeExpr ctx sample (List exprs) =
     case sample of
         TypeList innerType -> mapM_ (checkTypeExpr ctx innerType) exprs
@@ -334,15 +390,15 @@ checkTypeExpr ctx sample (Tuple exprs) =
             when (length exprs /= length fields) $ checkFailed UnexpectedTupleLength
             zipWithM_ (checkTypeExpr ctx) fields exprs
         _ -> checkFailed UnexpectedTuple
-checkTypeExpr ctx sample (Record bindings) =
+checkTypeExpr ctx sample (Record bindings) = do
     checkRecordDuplicates bindings
     case sample of
         TypeRecord sampleBindings -> do
             when (length bindings /= length sampleBindings) $ checkFailed UnexpectedTupleLength
             let expectedNameSet = getNameSet sampleBindings
             let actualNameSet = getNameSet bindings
-            when (Data.Set.size (expectedNameSet \\ actualNameSet)) checkFailed MissingRecordFields
-            when (Data.Set.size (actualNameSet \\ expectedNameSet)) checkFailed UnexpectedRecordFields
+            when (not $ Data.Set.null $ Data.Set.difference expectedNameSet actualNameSet) $ checkFailed MissingRecordFields
+            when (not $ Data.Set.null $ Data.Set.difference actualNameSet expectedNameSet) $ checkFailed UnexpectedRecordFields
             checkRecordInnerTypes ctx bindings sampleBindings
         _ -> checkFailed UnexpectedTuple
 checkTypeExpr ctx sample (ConsList expr1 expr2) =
@@ -357,7 +413,7 @@ checkTypeExpr ctx sample (IsEmpty expr) = do
     checkTypes ctx sample TypeBool
     t <- synthTypeExpr ctx expr
     case t of
-        TypeList innerType -> return innerType
+        TypeList _ -> return ()
         _ -> checkFailed NotAList
 checkTypeExpr ctx sample (Tail expr) = do
     -- Странная последовательность действий,
@@ -383,11 +439,11 @@ checkTypeExpr _ctx _sample (TryCastAs _expr1 _theType _pattern _expr2 _expr3) = 
 checkTypeExpr ctx sample (Inl expr) =
     case sample of
         TypeSum lt rt -> checkTypeExpr ctx lt expr
-        _ -> UnexpectedInjection
-checkTypeExpr ctx sample (Inr expr)
+        _ -> checkFailed UnexpectedInjection
+checkTypeExpr ctx sample (Inr expr) =
     case sample of
         TypeSum lt rt -> checkTypeExpr ctx rt expr
-        _ -> UnexpectedInjection
+        _ -> checkFailed UnexpectedInjection
 checkTypeExpr ctx sample (Succ expr) = do
     checkTypes ctx sample TypeNat
     checkTypeExpr ctx TypeNat expr
@@ -404,8 +460,8 @@ checkTypeExpr ctx sample (Fix expr) = do
         TypeFun lTypes rType -> do
             when (length lTypes /= 1) $ checkFailed IncorrectNumberOfArguments -- ???
             checkTypes ctx sample rType
-            checkTypes ctx rType $ head lType -- ???
-        _ -> NotAFunction
+            checkTypes ctx rType $ head lTypes -- ???
+        _ -> checkFailed NotAFunction
 checkTypeExpr ctx sample (NatRec count initial step) = do
     checkTypeExpr ctx TypeNat count
     initType <- synthTypeExpr ctx initial
@@ -577,9 +633,9 @@ synthTypeExpr ctx (Fix expr) = do
     case eType of
         TypeFun lTypes rType -> do
             when (length lTypes /= 1) $ checkFailed IncorrectNumberOfArguments -- ???
-            checkTypes ctx rType $ head lType -- ???
+            checkTypes ctx rType $ head lTypes -- ???
             return rType
-        _ -> NotAFunction
+        _ -> checkFailed NotAFunction
 synthTypeExpr ctx (NatRec count initial step) = do
     checkTypeExpr ctx TypeNat count
     initType <- synthTypeExpr ctx initial
