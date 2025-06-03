@@ -429,12 +429,7 @@ checkTypeExpr ctx sample (Var (StellaIdent name)) = do
     t <- getType ctx name
     if t == sample
         then return ()
-        else case sample of
-            TypeFun _ _ -> checkFailed NotAFunction
-            TypeTuple _ -> checkFailed NotATuple
-            TypeRecord _ -> checkFailed NotARecord
-            TypeList _ -> checkFailed NotAList
-            _ -> checkFailed UnexpectedTypeForExpression
+        else checkFailed UnexpectedTypeForExpression
 
 
 
@@ -605,4 +600,4 @@ synthTypeExpr _ctx (ConstInt _n) = do
 synthTypeExpr _ctx (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported
 synthTypeExpr ctx (Var (StellaIdent name)) = do
-    getType ctx name -- TODO
+    getType ctx name
