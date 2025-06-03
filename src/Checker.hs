@@ -164,6 +164,9 @@ checkNameDuplicates' code names =
     when (Data.Set.size (Data.Set.fromList names :: (Set String)) /= length names) $
         checkFailed code
 
+getNameSet :: (Named a) => [a] -> Set String
+getNameSet = Data.Set.fromList . map getName
+
 checkNameDuplicates :: (Named a) => CheckErrorCode -> [a] -> CheckResult ()
 checkNameDuplicates code named = checkNameDuplicates' code $ map getName named
 
@@ -173,6 +176,15 @@ checkStructureDuplicatesInRecordBinding (ARecordFieldType _ t) = checkStructureD
 checkStructureDuplicatesInVariantBinding :: VariantFieldType -> CheckResult ()
 checkStructureDuplicatesInVariantBinding (AVariantFieldType _ (SomeTyping t)) = checkStructureDuplicates t
 checkStructureDuplicatesInVariantBinding _ = return ()
+
+getVariantTypeByLabel :: [VariantFieldType] -> String -> CheckResult (Maybe Type)
+getVariantTypeByLabel [] label = checkFailed UnexpectedVariantLabel
+getVariantTypeByLabel (AVariantFieldType (StellaIdent name) NoTyping : next) label
+    | name == label = return Nothing
+    | otherwise     = getVariantTypeByLabel next label
+getVariantTypeByLabel (AVariantFieldType (StellaIdent name) (SomeTyping t) : next) label
+    | name == label = return t
+    | otherwise     = getVariantTypeByLabel next label
 
 checkStructureDuplicates :: Type -> CheckResult ()
 checkStructureDuplicates (TypeRecord bindings) = do
@@ -196,6 +208,17 @@ checkStructureDuplicates _ = return ()
 
 checkRecordDuplicates :: [Binding] -> CheckResult ()
 checkRecordDuplicates = mapM_ $ checkNameDuplicates DuplicateRecordFields
+
+checkRecordInnerTypes :: Context -> [Binding] -> [RecordFieldType] -> CheckResult ()
+checkRecordInnerTypes ctx exrps types = do
+    let eMap = Data.Map.fromList $ map (\(ABinding (StellaIdent n) e) -> (n, e)) exprs
+    mapM_ (
+        \(ARecordFieldType (StellaIdent n) t) ->
+            case Data.Map.lookup n eMap of
+                Just expr -> checkTypeExpr ctx t expr
+                Nothing -> checkFailed MissingRecordFields
+        )
+        types'
 
 
 
@@ -247,8 +270,16 @@ checkTypeExpr ctx sample (Abstraction params expr) = do
             zipWithM_ (checkTypes ctx) tParams declaredTypes
             checkTypeExpr (assumeFunctionParams ctx params) tRet expr
         _ -> checkFailed UnexpectedLambda
-checkTypeExpr _ctx _sample (Variant (StellaIdent _name) _exprData) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+checkTypeExpr ctx sample (Variant (StellaIdent name) exprData) = do
+    when (exprData == NoExprData) checkFailed Unsupported
+    case sample of
+        TypeVariant bindings -> do
+            maybeT <- getVariantTypeByLabel bindings name
+            when (t == Nothing) checkFailed Unsupported
+            let (Just t) = maybeT
+            let (SomeExprData expr) = exprData
+            checkTypeExpr ctx t expr
+        _ -> checkFailed UnexpectedVariant
 checkTypeExpr _ctx _sample (Match _expr _cases) = do
     checkFailed Unsupported  -- TODO: first, urgent
 checkTypeExpr ctx sample (List exprs) =
@@ -308,8 +339,11 @@ checkTypeExpr ctx sample (Record bindings) =
     case sample of
         TypeRecord sampleBindings -> do
             when (length bindings /= length sampleBindings) $ checkFailed UnexpectedTupleLength
-            -- zipWithM_ (checkTypeExpr ctx) sampleBindings bindings
-            -- FIXME: check field missing/unexpected
+            let expectedNameSet = getNameSet sampleBindings
+            let actualNameSet = getNameSet bindings
+            when (Data.Set.size (expectedNameSet \\ actualNameSet)) checkFailed MissingRecordFields
+            when (Data.Set.size (actualNameSet \\ expectedNameSet)) checkFailed UnexpectedRecordFields
+            checkRecordInnerTypes ctx bindings sampleBindings
         _ -> checkFailed UnexpectedTuple
 checkTypeExpr ctx sample (ConsList expr1 expr2) =
     case sample of
@@ -571,4 +605,4 @@ synthTypeExpr _ctx (ConstInt _n) = do
 synthTypeExpr _ctx (ConstMemory (MemoryAddress _address)) = do
     checkFailed Unsupported
 synthTypeExpr ctx (Var (StellaIdent name)) = do
-    getType ctx name
+    getType ctx name -- TODO
