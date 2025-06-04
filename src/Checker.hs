@@ -256,6 +256,42 @@ variantToMap bindings = fmap Data.Map.fromList $ mapM variantFieldToPair binding
     variantFieldToPair (AVariantFieldType _ NoTyping) = checkFailed Unsupported
     variantFieldToPair (AVariantFieldType (StellaIdent name) (SomeTyping t)) = return (name, t)
 
+checkTypeSumCase :: Context -> Type -> Type -> Type -> MatchCase -> CheckResult ()
+checkTypeSumCase ctx sample t1 t2 (AMatchCase pat expr) = do
+    case pat of
+        PatternInl (PatternVar (StellaIdent var)) ->
+            checkTypeExpr (assumeType ctx var t1) sample expr
+        PatternInr (PatternVar (StellaIdent var)) ->
+            checkTypeExpr (assumeType ctx var t2) sample expr
+        _ -> checkFailed Unsupported
+
+checkTypeVariantCase :: Context -> Type -> Map String Type -> MatchCase -> CheckResult ()
+checkTypeVariantCase ctx sample typeMap (AMatchCase pat expr) = do
+    case pat of
+        PatternVariant (StellaIdent label) (SomePatternData (PatternVar (StellaIdent var))) ->
+            case Data.Map.lookup label typeMap of
+                Just t -> checkTypeExpr (assumeType ctx var t) sample expr
+                Nothing -> checkFailed Unsupported
+        _ -> checkFailed Unsupported
+
+synthTypeSumCase :: Context -> Type -> Type -> MatchCase -> CheckResult Type
+synthTypeSumCase ctx t1 t2 (AMatchCase pat expr) = do
+    case pat of
+        PatternInl (PatternVar (StellaIdent var)) ->
+            synthTypeExpr (assumeType ctx var t1) expr
+        PatternInr (PatternVar (StellaIdent var)) ->
+            synthTypeExpr (assumeType ctx var t2) expr
+        _ -> checkFailed Unsupported
+
+synthTypeVariantCase :: Context -> Map String Type -> MatchCase -> CheckResult Type
+synthTypeVariantCase ctx typeMap (AMatchCase pat expr) = do
+    case pat of
+        PatternVariant (StellaIdent label) (SomePatternData (PatternVar (StellaIdent var))) ->
+            case Data.Map.lookup label typeMap of
+                Just t -> synthTypeExpr (assumeType ctx var t) expr
+                Nothing -> checkFailed Unsupported
+        _ -> checkFailed Unsupported
+
 
 
 -- CHECK
@@ -323,25 +359,11 @@ checkTypeExpr ctx sample (Match matchedExpr cases) = do
     case matched of
         TypeSum t1 t2 -> do
             checkTypeSumCover patterns
-            mapM_ (\(AMatchCase pat expr) -> do
-                    case pat of
-                        PatternInl (PatternVar (StellaIdent var)) -> checkTypeExpr (assumeType ctx var t1) sample expr
-                        PatternInr (PatternVar (StellaIdent var)) -> checkTypeExpr (assumeType ctx var t2) sample expr
-                        _ -> checkFailed Unsupported
-                )
-                cases
+            mapM_ (checkTypeSumCase ctx sample t1 t2) cases
         TypeVariant labels -> do
             typeMap <- variantToMap labels
             checkTypeVariantCover labels patterns
-            mapM_ (\(AMatchCase pat expr) -> do
-                    case pat of
-                        PatternVariant (StellaIdent label) (SomePatternData (PatternVar (StellaIdent var))) ->
-                            case Data.Map.lookup label typeMap of
-                                Just t -> checkTypeExpr (assumeType ctx var t) sample expr
-                                Nothing -> checkFailed Unsupported
-                        _ -> checkFailed Unsupported
-                )
-                cases
+            mapM_ (checkTypeVariantCase ctx sample typeMap) cases
         _ -> checkFailed UnexpectedPatternForType
 checkTypeExpr ctx sample (List exprs) =
     case sample of
@@ -542,8 +564,28 @@ synthTypeExpr ctx (Abstraction params expr) = do
     return $ TypeFun declaredTypes retType
 synthTypeExpr _ctx (Variant (StellaIdent _name) _exprData) = do
     checkFailed AmbiguousVariantType
-synthTypeExpr _ctx (Match _expr _cases) = do
-    checkFailed Unsupported  -- TODO: first, urgent
+synthTypeExpr ctx (Match matchedExpr cases) = do
+    let patterns = map (\(AMatchCase p _) -> p) cases
+    matched <- synthTypeExpr ctx matchedExpr
+    case matched of
+        TypeSum t1 t2 -> do
+            checkTypeSumCover patterns
+            case cases of
+                (first : next) -> do
+                    sample <- synthTypeSumCase ctx t1 t2 first
+                    mapM_ (checkTypeSumCase ctx sample t1 t2) next
+                    return sample
+                _ -> checkFailed NonexhaustiveMatchPatterns
+        TypeVariant labels -> do
+            typeMap <- variantToMap labels
+            checkTypeVariantCover labels patterns
+            case cases of
+                (first : next) -> do
+                    sample <- synthTypeVariantCase ctx typeMap first
+                    mapM_ (checkTypeVariantCase ctx sample typeMap) next
+                    return sample
+                _ -> checkFailed NonexhaustiveMatchPatterns
+        _ -> checkFailed UnexpectedPatternForType
 synthTypeExpr _ctx (List _exprs) = do
     checkFailed AmbiguousList
 synthTypeExpr _ctx (Add _expr1 _expr2) = do
