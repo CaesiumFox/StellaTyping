@@ -95,7 +95,7 @@ getType :: Context -> String -> CheckResult Type
 getType ctx name
     = case Data.Map.lookup name (table ctx) of
         Just t -> return t
-        Nothing -> checkFailed UndefinedVariable
+        Nothing -> checkFailed $ UndefinedVariable name
 
 assumeType :: Context -> String -> Type -> Context
 assumeType ctx name newType = ctx{table = Data.Map.insert name newType (table ctx)}
@@ -134,7 +134,10 @@ checkProgram prog@(AProgram _ _ decls) = do
     mapM_ (checkDeclaration ctx) decls
 
 checkTypes :: Context -> Type -> Type -> CheckResult ()
-checkTypes ctx = checkTypesWith ctx UnexpectedTypeForExpression
+checkTypes ctx expected actual = checkTypesWith ctx (UnexpectedTypeForExpression expected actual) expected actual
+
+checkTypesParam :: Context -> Type -> Type -> CheckResult ()
+checkTypesParam ctx expected actual = checkTypesWith ctx (UnexpectedTypeForParameter expected actual) expected actual
 
 checkTypesWith :: Context -> CheckErrorCode -> Type -> Type -> CheckResult ()
 checkTypesWith _ctx err expected actual = when (expected /= actual) $ checkFailed err
@@ -342,7 +345,7 @@ checkTypeExpr ctx sample (Abstraction params expr) = do
             when (tParamsLen /= paramsLen) $ checkFailed IncorrectNumberOfArguments
             let declaredTypes = map (\(AParamDecl _ t) -> t) params
             mapM_ checkStructureDuplicates declaredTypes
-            zipWithM_ (checkTypesWith ctx UnexpectedTypeForParameter) tParams declaredTypes
+            zipWithM_ (checkTypesParam ctx) tParams declaredTypes
             checkTypeExpr (assumeFunctionParams ctx params) tRet expr
         _ -> checkFailed UnexpectedLambda
 checkTypeExpr ctx sample (Variant (StellaIdent name) exprData) =
@@ -456,7 +459,7 @@ checkTypeExpr ctx sample (Tail expr) = do
         _ -> do
             argType <- synthTypeExpr ctx expr
             case argType of
-                TypeList _ -> checkFailed UnexpectedTypeForExpression
+                TypeList _ -> checkFailed $ UnexpectedTypeForExpression sample argType
                 _ -> checkFailed NotAList
 checkTypeExpr _ctx _sample (Panic) = do
     checkFailed Unsupported
@@ -519,7 +522,7 @@ checkTypeExpr ctx sample (Var (StellaIdent name)) = do
     t <- getType ctx name
     if t == sample
         then return ()
-        else checkFailed UnexpectedTypeForExpression
+        else checkFailed $ UnexpectedTypeForExpression sample t
 
 
 

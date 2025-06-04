@@ -27,6 +27,7 @@ library
   exposed-modules:
       Checker
       CheckError
+      FancyType
       Lib
       Named
       Stella.Abs

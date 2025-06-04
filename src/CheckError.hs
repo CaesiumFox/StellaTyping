@@ -4,17 +4,20 @@ module CheckError(
     checkFailed
 ) where
 
+import Stella.Abs;
+import FancyType;
+
 data CheckErrorCode
     = Unsupported
     | MissingMain
-    | UndefinedVariable
-    | UnexpectedTypeForExpression
+    | UndefinedVariable String
+    | UnexpectedTypeForExpression Type Type
     | NotAFunction
     | NotATuple
     | NotARecord
     | NotAList
     | UnexpectedLambda
-    | UnexpectedTypeForParameter
+    | UnexpectedTypeForParameter Type Type
     | UnexpectedTuple
     | UnexpectedRecord
     | UnexpectedVariant
@@ -54,19 +57,27 @@ data CheckErrorCode
     | NotAGenericFunction
     | IncorrectNumberOfTypeArguments
     | UndefinedTypeVariable
-    deriving(Eq, Ord, Enum);
+    deriving(Eq, Ord);
 
 instance Show CheckErrorCode where
     show Unsupported = "ERROR_UNSUPPORTED"
     show MissingMain = "ERROR_MISSING_MAIN"
-    show UndefinedVariable = "ERROR_UNDEFINED_VARIABLE"
-    show UnexpectedTypeForExpression = "ERROR_UNEXPECTED_TYPE_FOR_EXPRESSION"
+    show (UndefinedVariable name) = "ERROR_UNDEFINED_VARIABLE\n  " ++ name
+    show (UnexpectedTypeForExpression t1 t2) =
+        "ERROR_UNEXPECTED_TYPE_FOR_EXPRESSION\n  Expected: "
+            ++ fancyType t1
+            ++ "\n  Actual: "
+            ++ fancyType t2
     show NotAFunction = "ERROR_NOT_A_FUNCTION"
     show NotATuple = "ERROR_NOT_A_TUPLE"
     show NotARecord = "ERROR_NOT_A_RECORD"
     show NotAList = "ERROR_NOT_A_LIST"
     show UnexpectedLambda = "ERROR_UNEXPECTED_LAMBDA"
-    show UnexpectedTypeForParameter = "ERROR_UNEXPECTED_TYPE_FOR_PARAMETER"
+    show (UnexpectedTypeForParameter t1 t2) =
+        "ERROR_UNEXPECTED_TYPE_FOR_PARAMETER\n  Expected: "
+            ++ fancyType t1
+            ++ "\n  Actual: "
+            ++ fancyType t2
     show UnexpectedTuple = "ERROR_UNEXPECTED_TUPLE"
     show UnexpectedRecord = "ERROR_UNEXPECTED_RECORD"
     show UnexpectedVariant = "ERROR_UNEXPECTED_VARIANT"
