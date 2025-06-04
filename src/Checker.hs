@@ -48,15 +48,12 @@ paramsToTypes :: [ParamDecl] -> [Type]
 paramsToTypes [] = []
 paramsToTypes (AParamDecl _ theType : next) = theType : paramsToTypes next
 
-checkMainExistence :: Context -> CheckResult ()
-checkMainExistence ctx =
-    if hasMain $ keys $ table ctx
-        then return ()
-        else checkFailed MissingMain
+getFirstMainType :: Context -> CheckResult Type
+getFirstMainType ctx = getFirstMainType' $ assocs $ table ctx
   where
-    hasMain [] = False
-    hasMain ("main" : _) = True
-    hasMain (_ : rest) = hasMain rest
+    getFirstMainType' [] = checkFailed MissingMain
+    getFirstMainType' (("main", t) : _) = return t
+    getFirstMainType' (_ : rest) = getFirstMainType' rest
 
 checkExtensionSupport :: Context -> CheckResult ()
 checkExtensionSupport ctx = mapM_ checkExtension $ extensions ctx
@@ -127,7 +124,13 @@ checkProgram prog@(AProgram _ _ decls) = do
     tbl <- scanFunctions prog
     let ctx = Context{table = tbl, extensions = ext}
     checkExtensionSupport ctx
-    checkMainExistence ctx
+    mainType <- getFirstMainType ctx
+    case mainType of
+        TypeFun argTypes _ ->
+            case argTypes of
+                [_] -> return()
+                _ -> checkFailed IncorrectArityOfMain
+        _ -> checkFailed Unsupported
     mapM_ (checkDeclaration ctx) decls
 
 checkTypes :: Context -> Type -> Type -> CheckResult ()
@@ -339,7 +342,7 @@ checkTypeExpr ctx sample (Abstraction params expr) = do
             when (tParamsLen /= paramsLen) $ checkFailed IncorrectNumberOfArguments
             let declaredTypes = map (\(AParamDecl _ t) -> t) params
             mapM_ checkStructureDuplicates declaredTypes
-            zipWithM_ (checkTypes ctx) tParams declaredTypes
+            zipWithM_ (checkTypesWith ctx UnexpectedTypeForParameter) tParams declaredTypes
             checkTypeExpr (assumeFunctionParams ctx params) tRet expr
         _ -> checkFailed UnexpectedLambda
 checkTypeExpr ctx sample (Variant (StellaIdent name) exprData) =
@@ -358,13 +361,15 @@ checkTypeExpr ctx sample (Match matchedExpr cases) = do
     matched <- synthTypeExpr ctx matchedExpr
     case matched of
         TypeSum t1 t2 -> do
+            when (length patterns == 0) $ checkFailed IllegalEmptyMatching
             checkTypeSumCover patterns
             mapM_ (checkTypeSumCase ctx sample t1 t2) cases
         TypeVariant labels -> do
+            when (length patterns == 0) $ checkFailed IllegalEmptyMatching
             typeMap <- variantToMap labels
             checkTypeVariantCover labels patterns
             mapM_ (checkTypeVariantCase ctx sample typeMap) cases
-        _ -> checkFailed UnexpectedPatternForType
+        _ -> checkFailed Unsupported
 checkTypeExpr ctx sample (List exprs) =
     case sample of
         TypeList innerType -> mapM_ (checkTypeExpr ctx innerType) exprs
@@ -421,13 +426,13 @@ checkTypeExpr ctx sample (Record bindings) = do
     checkRecordDuplicates bindings
     case sample of
         TypeRecord sampleBindings -> do
-            when (length bindings /= length sampleBindings) $ checkFailed UnexpectedTupleLength
+            --when (length bindings /= length sampleBindings) $ checkFailed UnexpectedTupleLength
             let expectedNameSet = getNameSet sampleBindings
             let actualNameSet = getNameSet bindings
             when (not $ Data.Set.null $ Data.Set.difference expectedNameSet actualNameSet) $ checkFailed MissingRecordFields
             when (not $ Data.Set.null $ Data.Set.difference actualNameSet expectedNameSet) $ checkFailed UnexpectedRecordFields
             checkRecordInnerTypes ctx bindings sampleBindings
-        _ -> checkFailed UnexpectedTuple
+        _ -> checkFailed UnexpectedRecord
 checkTypeExpr ctx sample (ConsList expr1 expr2) =
     case sample of
         TypeList innerType -> do
@@ -569,14 +574,16 @@ synthTypeExpr ctx (Match matchedExpr cases) = do
     matched <- synthTypeExpr ctx matchedExpr
     case matched of
         TypeSum t1 t2 -> do
+            when (length patterns == 0) $ checkFailed IllegalEmptyMatching
             checkTypeSumCover patterns
             case cases of
                 (first : next) -> do
                     sample <- synthTypeSumCase ctx t1 t2 first
                     mapM_ (checkTypeSumCase ctx sample t1 t2) next
                     return sample
-                _ -> checkFailed NonexhaustiveMatchPatterns
+                _ -> checkFailed IllegalEmptyMatching
         TypeVariant labels -> do
+            when (length patterns == 0) $ checkFailed IllegalEmptyMatching
             typeMap <- variantToMap labels
             checkTypeVariantCover labels patterns
             case cases of
@@ -584,8 +591,8 @@ synthTypeExpr ctx (Match matchedExpr cases) = do
                     sample <- synthTypeVariantCase ctx typeMap first
                     mapM_ (checkTypeVariantCase ctx sample typeMap) next
                     return sample
-                _ -> checkFailed NonexhaustiveMatchPatterns
-        _ -> checkFailed UnexpectedPatternForType
+                _ -> checkFailed IllegalEmptyMatching
+        _ -> checkFailed Unsupported
 synthTypeExpr _ctx (List _exprs) = do
     checkFailed AmbiguousList
 synthTypeExpr _ctx (Add _expr1 _expr2) = do
