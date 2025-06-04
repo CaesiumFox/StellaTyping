@@ -599,6 +599,7 @@ synthTypeExpr ctx (List exprs) = do
         (first : next) -> do
             sample <- synthTypeExpr ctx first
             mapM_ (checkTypeExpr ctx sample) next
+            return $ TypeList sample
 synthTypeExpr _ctx (Add _expr1 _expr2) = do
     checkFailed Unsupported
 synthTypeExpr _ctx (Subtract _expr1 _expr2) = do
@@ -650,6 +651,7 @@ synthTypeExpr ctx (Record bindings) = do
 synthTypeExpr ctx (ConsList expr1 expr2) = do
     sample <- synthTypeExpr ctx expr1
     checkTypeExpr ctx (TypeList sample) expr2
+    return $ TypeList sample
 synthTypeExpr ctx (Head expr) = do
     t <- synthTypeExpr ctx expr
     case t of
